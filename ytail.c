@@ -20,7 +20,7 @@
 
 #define BUFSIZE 1024
 #define MAX_EVENTS 16
-#define TRAILING_LINES 40
+#define TRAILING_LINES 5
 
 long path_len;
 char* readlink_buf;
@@ -82,11 +82,11 @@ off_t find_lines_offset(struct fdata* fd, struct stat* stbuf)
     char buf[FIND_LINE_BUFSIZE];
     int num_newlines_found = 0;
     off_t offset = stbuf->st_size;
-    off_t init_offset;
-    while(num_newlines_found <= TRAILING_LINES && offset > 0) {
+    off_t init_offset = offset;
+    while(num_newlines_found <= TRAILING_LINES && init_offset > 0) {
         char* found;
-        offset = max(offset - FIND_LINE_BUFSIZE, 0);
-        init_offset = offset;
+        init_offset = max(init_offset - FIND_LINE_BUFSIZE, 0);
+        offset = init_offset;
         lseek(fd->fd, offset, SEEK_SET);
         if ((read_size = read(fd->fd, buf, FIND_LINE_BUFSIZE)) < 0) {
             perror("find_lines_offset read");
@@ -101,6 +101,8 @@ off_t find_lines_offset(struct fdata* fd, struct stat* stbuf)
             }
         } while(num_newlines_found <= TRAILING_LINES && found != NULL);
     }
+    if (num_newlines_found < TRAILING_LINES)
+        return 0;
     return offset;
 }
 
@@ -141,7 +143,7 @@ int main(int argc, char** argv)
     struct fdata fd;
     struct stat stbuf;
 
-    int rv = 0;
+    bool running = true;
 
     if (argc != 2) {
         fprintf(stderr, "Usage: ytail filename\n"
@@ -152,11 +154,6 @@ int main(int argc, char** argv)
     fd.filename = argv[1];
     fd.fd = -1;
     fd.offset = -1;
-
-    if (access(fd.filename, R_OK|F_OK) != 0) {
-        fprintf(stderr, "Unable to access %s\n", fd.filename);
-        return EXIT_FAILURE;
-    }
 
     path_len = pathconf(fd.filename, _PC_PATH_MAX);
     readlink_buf = malloc(path_len * sizeof(char));
@@ -180,11 +177,17 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    open_file(&fd);
-    tail_file(&fd);
-
     lstat(fd.filename, &stbuf);
-    printf("%s 0x%x\n", fd.filename, stbuf.st_mode);
+    
+    if (S_ISREG(stbuf.st_mode) && access(fd.filename, R_OK|F_OK) != 0) {
+        fprintf(stderr, "Unable to access %s\n", fd.filename);
+        return EXIT_FAILURE;
+    }
+    if (S_ISREG(stbuf.st_mode) || access(fd.filename, R_OK) == 0) {
+        open_file(&fd);
+        tail_file(&fd);
+    }
+
     if (S_ISLNK(stbuf.st_mode)) {
         link_watch = inotify_add_watch(in, fd.filename, IN_ALL_EVENTS|IN_DONT_FOLLOW);
         in_watch = inotify_add_watch(in, readlink_full(fd.filename), IN_ALL_EVENTS);
@@ -192,7 +195,7 @@ int main(int argc, char** argv)
         link_watch = -1;
         in_watch = inotify_add_watch(in, fd.filename, IN_ALL_EVENTS);
     }
-    while (rv >= 0) {
+    while (running) {
         int num_events;
         int i;
         if ((num_events = epoll_wait(ep, events, MAX_EVENTS, 1000)) < 0) {
@@ -216,7 +219,7 @@ int main(int argc, char** argv)
                             return EXIT_FAILURE;
                         }
                     } else if (err != sizeof(struct inotify_event)) {
-                        fprintf(stderr, "Got %d bytes, expected %d\n", err, sizeof(struct inotify_event));
+                        fprintf(stderr, "Got %d bytes, expected %lu\n", err, sizeof(struct inotify_event));
                     }
                     if (d.wd == link_watch) {
                         remove_link = true;
@@ -242,8 +245,12 @@ int main(int argc, char** argv)
                     link_watch = inotify_add_watch(in, fd.filename, IN_ALL_EVENTS|IN_DONT_FOLLOW);
                 }
             } else {
-                char buf[1024];
-                ssize_t dsize = read(STDIN_FILENO, &buf, 1024);
+                char buf[BUFSIZ];
+                ssize_t dsize = read(STDIN_FILENO, &buf, BUFSIZ);
+                if (dsize == 0) {
+                    running = false;
+                    break;
+                }
                 write(STDOUT_FILENO, &buf, dsize);
             }
         }
