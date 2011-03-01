@@ -19,8 +19,9 @@
 #include <unistd.h>
 
 #define BUFSIZE 1024
+#define FIND_LINE_BUFSIZE 1024
 #define MAX_EVENTS 16
-#define TRAILING_LINES 5
+#define TRAILING_LINES 10
 
 long path_len;
 char* readlink_buf;
@@ -37,12 +38,21 @@ long max(long a, long b)
     return (a > b) ? a : b;
 }
 
+/* Do a readlink and return a pointer to the result.
+ * Not reentrant.
+ * Kind of sketchy.
+ */
 char* readlink_full(const char* path)
 {
     char buf[path_len + 1];
     ssize_t read_b;
-    read_b = readlink(path, buf, path_len);
-    buf[read_b] = '\0';
+    struct stat stbuf;
+    strcpy(buf, path);
+    do {
+        lstat(buf, &stbuf);
+        read_b = readlink(path, buf, path_len);
+        buf[read_b] = '\0';
+    } while(S_ISLNK(stbuf.st_mode))
     strncpy(readlink_buf, buf, read_b+1);
     return readlink_buf;
 }
@@ -57,21 +67,6 @@ int open_file(struct fdata* fd)
     }
     return fd->fd;
 }
-
-bool data_to_read(struct fdata* fd)
-{
-    char fnbuf[path_len];
-    ssize_t fnsiz;
-    fnsiz = readlink(fd->filename, fnbuf, path_len - 1);
-    if (fnsiz == -1) {
-        perror("readlink");
-        return -1;
-    }
-    fnbuf[fnsiz] = '\0';
-    return fnsiz;
-}
-
-#define FIND_LINE_BUFSIZE 1024
 
 /* Find the offset that is either TRAILING_LINES behind the
  * end of the file or is at the beginning of the file
@@ -245,13 +240,12 @@ int main(int argc, char** argv)
                     link_watch = inotify_add_watch(in, fd.filename, IN_ALL_EVENTS|IN_DONT_FOLLOW);
                 }
             } else {
-                char buf[BUFSIZ];
-                ssize_t dsize = read(STDIN_FILENO, &buf, BUFSIZ);
+                char buf[1];
+                ssize_t dsize = read(STDIN_FILENO, &buf, 1);
                 if (dsize == 0) {
                     running = false;
                     break;
                 }
-                write(STDOUT_FILENO, &buf, dsize);
             }
         }
     }
