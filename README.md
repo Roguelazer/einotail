@@ -1,8 +1,8 @@
 einotail
 =======
-* Have you ever thought that `tail -F` is too heavyweight?
+* Have you ever thought that `tail -F` is too heavyweight and really shouldn't be doing all that polling?
 * Have you ever wanted to plug `tail -F` into xinetd, only to find that it won't terminate until it successfully reads data?
-* Have you ever wanted to use `epoll(7)`, `inotify(7)`, and `C (99)` in the same program?
+* Have you ever wanted to use [http://www.kernel.org/doc/man-pages/online/pages/man4/epoll.4.html](epoll)(7), [http://www.kernel.org/doc/man-pages/online/pages/man7/inotify.7.html](inotify)(7), and [http://en.wikipedia.org/wiki/C99](C) (99) in the same program?
 
 If you answered "yes" to all three of these questions, `einotail` is for you!
 
