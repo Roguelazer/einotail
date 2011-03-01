@@ -6,6 +6,8 @@ einotail
 
 If you answered "yes" to all three of these questions, `einotail` is for you!
 
+If you think **EINOTAIL** is an errno value raised when `tail` doesn't work, `einotail` may also be for you.
+
 Usage
 -----
 `einotail /path/to/file`
