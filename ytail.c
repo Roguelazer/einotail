@@ -1,3 +1,8 @@
+/**
+ * It's like tail.
+ * but with epoll and inotify.
+ **/
+
 #define _XOPEN_SOURCE 600
 
 #include <assert.h>
@@ -25,7 +30,6 @@ struct fdata {
     const char *filename;
     const char *full_filename;
     off_t offset;
-    off_t size;
 };
 
 long max(long a, long b)
@@ -47,7 +51,6 @@ int open_file(struct fdata* fd)
 {
     if (fd->fd != -1)
         close(fd->fd);
-    printf("opening '%s'\n", fd->filename);
     if ((fd->fd = open(fd->filename, O_RDONLY)) < 0) {
         perror("open");
         return -1;
@@ -84,7 +87,6 @@ off_t find_lines_offset(struct fdata* fd, struct stat* stbuf)
         char* found;
         offset = max(offset - FIND_LINE_BUFSIZE, 0);
         init_offset = offset;
-        printf("Reading at %d\n", offset);
         lseek(fd->fd, offset, SEEK_SET);
         if ((read_size = read(fd->fd, buf, FIND_LINE_BUFSIZE)) < 0) {
             perror("find_lines_offset read");
@@ -93,15 +95,12 @@ off_t find_lines_offset(struct fdata* fd, struct stat* stbuf)
         do { 
             found = strrchr(buf, '\n');
             if (found != NULL) {
-                printf("Found at index %d\n", (found - buf));
                 *found = '\0';
                 offset = (found - buf) + init_offset + 1;
                 num_newlines_found++;
-                printf("Found %d newlines\n", num_newlines_found);
             }
         } while(num_newlines_found <= TRAILING_LINES && found != NULL);
     }
-    printf("Returning offset %d\n", offset);
     return offset;
 }
 
@@ -115,24 +114,22 @@ int tail_file(struct fdata* fd)
     if (fd->offset == -1) {
         fd->offset = find_lines_offset(fd, &stbuf);
     }
-    if (fd->size == -1) {
-        fd->size = stbuf.st_size;
+    if (fd->offset > stbuf.st_size) {
+        fd->offset = stbuf.st_size;
     }
 
     lseek(fd->fd, fd->offset, SEEK_SET);
-    while (fd->offset < fd->size) {
+    while (fd->offset < stbuf.st_size) {
         read_s = read(fd->fd, &read_buf, BUFSIZE);
         if (read_s <  0) {
-            perror("read");
+            perror("tail_file read");
             return -1;
         } else if (read_s == 0) {
             break;
         }
         write(STDOUT_FILENO, read_buf, read_s);
+        fd->offset += read_s;
     }
-    fd->offset += read_s;
-    close(fd->fd);
-    fd->fd = -1;
     return read_s;
 }
 
@@ -155,7 +152,6 @@ int main(int argc, char** argv)
     fd.filename = argv[1];
     fd.fd = -1;
     fd.offset = -1;
-    fd.size = -1;
 
     if (access(fd.filename, R_OK|F_OK) != 0) {
         fprintf(stderr, "Unable to access %s\n", fd.filename);
@@ -187,7 +183,8 @@ int main(int argc, char** argv)
     open_file(&fd);
     tail_file(&fd);
 
-    stat(fd.filename, &stbuf);
+    lstat(fd.filename, &stbuf);
+    printf("%s 0x%x\n", fd.filename, stbuf.st_mode);
     if (S_ISLNK(stbuf.st_mode)) {
         link_watch = inotify_add_watch(in, fd.filename, IN_ALL_EVENTS|IN_DONT_FOLLOW);
         in_watch = inotify_add_watch(in, readlink_full(fd.filename), IN_ALL_EVENTS);
@@ -206,6 +203,9 @@ int main(int argc, char** argv)
             if (events[i].data.fd == in) {
                 struct inotify_event d;
                 int err;
+                bool remove_in = false;
+                bool remove_link = false;
+                bool reread = false;
                 while(1) {
                     if ((err = read(in, &d, sizeof(struct inotify_event))) < 1) {
                         if (errno == EAGAIN || errno == EWOULDBLOCK) {
@@ -216,36 +216,37 @@ int main(int argc, char** argv)
                             return EXIT_FAILURE;
                         }
                     } else if (err != sizeof(struct inotify_event)) {
-                        printf("Got %d bytes, expected %d\n", err, sizeof(struct inotify_event));
+                        fprintf(stderr, "Got %d bytes, expected %d\n", err, sizeof(struct inotify_event));
                     }
                     if (d.wd == link_watch) {
-                        printf("Adding watch for %s\n", readlink_full(fd.filename));
-                        inotify_rm_watch(in, in_watch);
-                        in_watch = inotify_add_watch(in, readlink_full(fd.filename), IN_ALL_EVENTS);
-                        open_file(&fd);
+                        remove_link = true;
+                        if (!(d.mask & IN_DELETE)) {
+                            reread = true;
+                            remove_in = true;
+                        }
                     } else {
-                        printf("Activity on actual file\n");
                         tail_file(&fd);
                     }
-
-                    if (d.mask & IN_DELETE_SELF) {
-                        printf("DELETE\n");
-                    } else if (d.mask & IN_MOVE_SELF) {
-                        printf("MOVE\n");
-                    } else if (d.mask & IN_MODIFY) {
-                        printf("MODIFY\n");
-                    } else if (d.mask & IN_CREATE) {
-                        printf("CREATE\n");
-                    }
+                }
+                if (remove_in) {
+                    inotify_rm_watch(in, in_watch);
+                    in_watch = inotify_add_watch(in, readlink_full(fd.filename), IN_ALL_EVENTS);
+                }
+                if (reread) {
+                    open_file(&fd);
+                    fd.offset = 0;
+                    tail_file(&fd);
+                }
+                if (remove_link) {
+                    inotify_rm_watch(in, link_watch);
+                    link_watch = inotify_add_watch(in, fd.filename, IN_ALL_EVENTS|IN_DONT_FOLLOW);
                 }
             } else {
-                printf("activity on stdin\n");
                 char buf[1024];
                 ssize_t dsize = read(STDIN_FILENO, &buf, 1024);
                 write(STDOUT_FILENO, &buf, dsize);
             }
         }
-        printf("%d\n", num_events);
     }
 
     close(in);
