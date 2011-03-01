@@ -14,5 +14,5 @@ Behaves roughly the same as `tail -F`. More specifically, this will cause `einot
 
 License
 -------
-`einotify` is available under the ISC (OpenBSD) license. The full contents of this
+`einotail` is available under the ISC (OpenBSD) license. The full contents of this
 license are available as LICENSE
