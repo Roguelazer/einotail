@@ -52,7 +52,7 @@ char* readlink_full(const char* path)
         lstat(buf, &stbuf);
         read_b = readlink(path, buf, path_len);
         buf[read_b] = '\0';
-    } while(S_ISLNK(stbuf.st_mode))
+    } while (S_ISLNK(stbuf.st_mode));
     strncpy(readlink_buf, buf, read_b+1);
     return readlink_buf;
 }
@@ -141,7 +141,7 @@ int main(int argc, char** argv)
     bool running = true;
 
     if (argc != 2) {
-        fprintf(stderr, "Usage: ytail filename\n"
+        fprintf(stderr, "Usage: einotail filename\n"
                 "Behaves like tail -F filename\n");
         return 2;
     }
